@@ -196,7 +196,7 @@ def create_users_table():
     except Exception as e:
         return {"error": str(e)}
         
-@app.post("/create-user")
+@app.get("/create-users-table")
 def create_user(
     username: str = Body(...),
     password: str = Body(...),
