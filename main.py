@@ -125,4 +125,22 @@ def get_products():
 
     except Exception as e:
         return {"error": str(e)}
+@app.delete("/delete-product/{product_id}")
+def delete_product(product_id: int):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("DELETE FROM products WHERE id = %s", (product_id,))
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "deleted",
+            "product_id": product_id
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
