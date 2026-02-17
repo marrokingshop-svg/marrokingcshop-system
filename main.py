@@ -294,6 +294,147 @@ def adjust_stock(product_id: int, new_stock: int = Body(...)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+# =====================================================
+# VENTAS PROFESIONALES ERP
+# =====================================================
+
+@app.get("/create-sales-tables")
+def create_sales_tables():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # Tabla principal de ventas
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS sales (
+            id SERIAL PRIMARY KEY,
+            total NUMERIC,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # Detalle de productos vendidos
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS sale_items (
+            id SERIAL PRIMARY KEY,
+            sale_id INTEGER REFERENCES sales(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES products(id),
+            quantity INTEGER,
+            price NUMERIC
+        )
+        """)
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "sales tables ready"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/create-sale")
+def create_sale(items: list = Body(...)):
+    """
+    items = [
+        {"product_id": 1, "quantity": 2},
+        {"product_id": 3, "quantity": 1}
+    ]
+    """
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        total = 0
+
+        # Verificar stock y calcular total
+        for item in items:
+            cur.execute("SELECT price, stock FROM products WHERE id = %s", (item["product_id"],))
+            product = cur.fetchone()
+
+            if not product:
+                raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+            if product["stock"] < item["quantity"]:
+                raise HTTPException(status_code=400, detail="Stock insuficiente")
+
+            total += float(product["price"]) * item["quantity"]
+
+        # Crear venta
+        cur.execute("INSERT INTO sales (total) VALUES (%s) RETURNING id", (total,))
+        sale_id = cur.fetchone()["id"]
+
+        # Insertar detalle y descontar stock
+        for item in items:
+            cur.execute("SELECT price FROM products WHERE id = %s", (item["product_id"],))
+            product = cur.fetchone()
+
+            cur.execute("""
+                INSERT INTO sale_items (sale_id, product_id, quantity, price)
+                VALUES (%s, %s, %s, %s)
+            """, (sale_id, item["product_id"], item["quantity"], product["price"]))
+
+            cur.execute("""
+                UPDATE products
+                SET stock = stock - %s
+                WHERE id = %s
+            """, (item["quantity"], item["product_id"]))
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "venta registrada",
+            "sale_id": sale_id,
+            "total": total
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sales")
+def get_sales():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT * FROM sales
+        ORDER BY id DESC
+        """)
+        sales = cur.fetchall()
+
+        conn.close()
+
+        return {"sales": sales}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sale-detail/{sale_id}")
+def sale_detail(sale_id: int):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT p.name, si.quantity, si.price
+        FROM sale_items si
+        JOIN products p ON p.id = si.product_id
+        WHERE si.sale_id = %s
+        """, (sale_id,))
+
+        items = cur.fetchall()
+
+        conn.close()
+
+        return {"sale_id": sale_id, "items": items}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # =====================================================
