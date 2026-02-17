@@ -52,3 +52,28 @@ def db_test():
             "database": "error",
             "error": str(e)
         }
+@app.get("/create-table")
+def create_table():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            brand TEXT,
+            size TEXT,
+            color TEXT,
+            price NUMERIC,
+            stock INTEGER
+        )
+        """)
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "table created"}
+
+    except Exception as e:
+        return {"error": str(e)}
