@@ -204,6 +204,97 @@ def sell_product(product_id: int, quantity: int = Body(...)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+# =====================================================
+# INVENTARIO AVANZADO ERP
+# =====================================================
+
+@app.get("/low-stock")
+def low_stock():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT * FROM products
+        WHERE stock < 10
+        ORDER BY stock ASC
+        """)
+
+        products = cur.fetchall()
+
+        conn.close()
+
+        return {
+            "alert": "Productos con stock menor a 10",
+            "count": len(products),
+            "products": products
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/update-product/{product_id}")
+def update_product(
+    product_id: int,
+    name: str = Body(...),
+    brand: str = Body(...),
+    size: str = Body(...),
+    color: str = Body(...),
+    price: float = Body(...),
+    stock: int = Body(...)
+):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        UPDATE products
+        SET name=%s, brand=%s, size=%s, color=%s, price=%s, stock=%s
+        WHERE id=%s
+        RETURNING id
+        """, (name, brand, size, color, price, stock, product_id))
+
+        updated = cur.fetchone()
+
+        if not updated:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "producto actualizado", "product_id": product_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/adjust-stock/{product_id}")
+def adjust_stock(product_id: int, new_stock: int = Body(...)):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        UPDATE products
+        SET stock = %s
+        WHERE id = %s
+        RETURNING id
+        """, (new_stock, product_id))
+
+        updated = cur.fetchone()
+
+        if not updated:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "stock actualizado", "new_stock": new_stock}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =====================================================
 # USUARIOS
