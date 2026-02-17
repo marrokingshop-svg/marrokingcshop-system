@@ -14,7 +14,12 @@ app = FastAPI(title="Marrokingcshop System")
 # CONFIGURACIÓN DE SEGURIDAD
 # =====================================================
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12
+)
+
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "CAMBIAR_ESTO_POR_ALGO_SUPER_SEGURO")
 ALGORITHM = "HS256"
