@@ -6,6 +6,3 @@ python-jose
 passlib[bcrypt]
 pydantic
 python-dotenv
-passlib[bcrypt]
-python-jose
-
