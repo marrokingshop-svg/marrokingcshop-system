@@ -170,8 +170,10 @@ def create_users_table():
     conn = get_connection()
     cur = conn.cursor()
 
+    cur.execute("DROP TABLE IF EXISTS users;")
+
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE users (
         id SERIAL PRIMARY KEY,
         username TEXT UNIQUE,
         password TEXT,
@@ -183,7 +185,8 @@ def create_users_table():
     conn.commit()
     conn.close()
 
-    return {"status": "users table ready"}
+    return {"status": "users table recreated clean"}
+    
 
 @app.post("/create-user")
 def create_user(
