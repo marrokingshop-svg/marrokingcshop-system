@@ -173,3 +173,26 @@ def sell_product(product_id: int, quantity: int = Body(...)):
 
     except Exception as e:
         return {"error": str(e)}
+        @app.get("/create-users-table")
+def create_users_table():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE,
+            password TEXT,
+            role TEXT
+        )
+        """)
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "users table created"}
+
+    except Exception as e:
+        return {"error": str(e)}
+
