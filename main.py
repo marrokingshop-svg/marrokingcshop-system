@@ -107,4 +107,22 @@ def add_product(
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/products")
+def get_products():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("SELECT * FROM products ORDER BY id DESC")
+        products = cur.fetchall()
+
+        conn.close()
+
+        return {
+            "status": "success",
+            "products": products
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
