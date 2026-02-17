@@ -434,6 +434,108 @@ def sale_detail(sale_id: int):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+# =====================================================
+# REPORTES FINANCIEROS
+# =====================================================
+
+@app.get("/sales-today")
+def sales_today():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT COALESCE(SUM(total),0) as total_today
+        FROM sales
+        WHERE DATE(created_at) = CURRENT_DATE
+        """)
+
+        result = cur.fetchone()
+        conn.close()
+
+        return {
+            "date": str(datetime.utcnow().date()),
+            "total_today": float(result["total_today"])
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sales-this-month")
+def sales_this_month():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT COALESCE(SUM(total),0) as total_month
+        FROM sales
+        WHERE DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
+        """)
+
+        result = cur.fetchone()
+        conn.close()
+
+        return {
+            "month": str(datetime.utcnow().month),
+            "total_this_month": float(result["total_month"])
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sales-by-date")
+def sales_by_date(start_date: str, end_date: str):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT COALESCE(SUM(total),0) as total_range
+        FROM sales
+        WHERE DATE(created_at) BETWEEN %s AND %s
+        """, (start_date, end_date))
+
+        result = cur.fetchone()
+        conn.close()
+
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "total": float(result["total_range"])
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/top-products")
+def top_products():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT p.name, SUM(si.quantity) as total_sold
+        FROM sale_items si
+        JOIN products p ON p.id = si.product_id
+        GROUP BY p.name
+        ORDER BY total_sold DESC
+        LIMIT 5
+        """)
+
+        products = cur.fetchall()
+        conn.close()
+
+        return {
+            "top_products": products
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
