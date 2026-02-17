@@ -125,6 +125,7 @@ def get_products():
 
     except Exception as e:
         return {"error": str(e)}
+
 @app.delete("/delete-product/{product_id}")
 def delete_product(product_id: int):
     try:
@@ -132,7 +133,6 @@ def delete_product(product_id: int):
         cur = conn.cursor()
 
         cur.execute("DELETE FROM products WHERE id = %s", (product_id,))
-
         conn.commit()
         conn.close()
 
@@ -143,13 +143,13 @@ def delete_product(product_id: int):
 
     except Exception as e:
         return {"error": str(e)}
+
 @app.post("/sell-product/{product_id}")
 def sell_product(product_id: int, quantity: int = Body(...)):
     try:
         conn = get_connection()
         cur = conn.cursor()
 
-        # Verificar stock actual
         cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
         product = cur.fetchone()
 
@@ -159,7 +159,6 @@ def sell_product(product_id: int, quantity: int = Body(...)):
         if product["stock"] < quantity:
             return {"error": "Stock insuficiente"}
 
-        # Descontar stock
         cur.execute("""
             UPDATE products
             SET stock = stock - %s
@@ -173,7 +172,10 @@ def sell_product(product_id: int, quantity: int = Body(...)):
 
     except Exception as e:
         return {"error": str(e)}
-     @app.get("/create-users-table")
+
+# ---------------- USERS ----------------
+
+@app.get("/create-users-table")
 def create_users_table():
     try:
         conn = get_connection()
@@ -195,8 +197,8 @@ def create_users_table():
 
     except Exception as e:
         return {"error": str(e)}
-        
-@app.get("/create-users-table")
+
+@app.post("/create-user")
 def create_user(
     username: str = Body(...),
     password: str = Body(...),
