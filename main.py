@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import psycopg2
@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# conexión a postgres usando DATABASE_URL de Render
+# conexión a postgres
 def get_connection():
     return psycopg2.connect(
         os.environ.get("DATABASE_URL"),
@@ -32,7 +32,6 @@ def home():
 def health():
     return {"status": "healthy"}
 
-# test conexión a base de datos
 @app.get("/db-test")
 def db_test():
     try:
@@ -48,10 +47,8 @@ def db_test():
         }
 
     except Exception as e:
-        return {
-            "database": "error",
-            "error": str(e)
-        }
+        return {"database": "error", "error": str(e)}
+
 @app.get("/create-table")
 def create_table():
     try:
@@ -77,40 +74,6 @@ def create_table():
 
     except Exception as e:
         return {"error": str(e)}
-        from fastapi import Body
-
-@app.post("/add-product")
-def add_product(
-    name: str = Body(...),
-    brand: str = Body(...),
-    size: str = Body(...),
-    color: str = Body(...),
-    price: float = Body(...),
-    stock: int = Body(...)
-):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        INSERT INTO products (name, brand, size, color, price, stock)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """, (name, brand, size, color, price, stock))
-
-        new_id = cur.fetchone()["id"]
-
-        conn.commit()
-        conn.close()
-
-        return {
-            "status": "product added",
-            "product_id": new_id
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
-        from fastapi import Body
 
 @app.post("/add-product")
 def add_product(
