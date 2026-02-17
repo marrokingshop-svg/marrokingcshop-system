@@ -143,4 +143,33 @@ def delete_product(product_id: int):
 
     except Exception as e:
         return {"error": str(e)}
+@app.post("/sell-product/{product_id}")
+def sell_product(product_id: int, quantity: int = Body(...)):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
+        # Verificar stock actual
+        cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
+        product = cur.fetchone()
+
+        if not product:
+            return {"error": "Producto no encontrado"}
+
+        if product["stock"] < quantity:
+            return {"error": "Stock insuficiente"}
+
+        # Descontar stock
+        cur.execute("""
+            UPDATE products
+            SET stock = stock - %s
+            WHERE id = %s
+        """, (quantity, product_id))
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "venta registrada"}
+
+    except Exception as e:
+        return {"error": str(e)}
