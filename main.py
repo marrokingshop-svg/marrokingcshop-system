@@ -195,4 +195,33 @@ def create_users_table():
 
     except Exception as e:
         return {"error": str(e)}
+        @app.post("/create-user")
+def create_user(
+    username: str = Body(...),
+    password: str = Body(...),
+    role: str = Body(...)
+):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO users (username, password, role)
+        VALUES (%s, %s, %s)
+        RETURNING id
+        """, (username, password, role))
+
+        user_id = cur.fetchone()["id"]
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "user created",
+            "user_id": user_id
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
 
