@@ -195,7 +195,9 @@ def create_users_table():
 
     except Exception as e:
         return {"error": str(e)}
-        @app.post("/create-user")
+
+
+@app.post("/create-user")
 def create_user(
     username: str = Body(...),
     password: str = Body(...),
@@ -224,4 +226,4 @@ def create_user(
     except Exception as e:
         return {"error": str(e)}
 
-
+       
