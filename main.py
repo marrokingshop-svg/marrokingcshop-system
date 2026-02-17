@@ -10,21 +10,21 @@ from datetime import datetime, timedelta
 
 app = FastAPI(title="Marrokingcshop System")
 
-# ===============================
-# CONFIGURACIÓN SEGURIDAD
-# ===============================
+# =====================================================
+# CONFIGURACIÓN DE SEGURIDAD
+# =====================================================
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET_KEY = "CAMBIAR_ESTO_POR_ALGO_SUPER_SEGURO"
+SECRET_KEY = os.environ.get("SECRET_KEY", "CAMBIAR_ESTO_POR_ALGO_SUPER_SEGURO")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 security = HTTPBearer()
 
-# ===============================
+# =====================================================
 # CORS
-# ===============================
+# =====================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,25 +34,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===============================
-# CONEXIÓN DB
-# ===============================
+# =====================================================
+# CONEXIÓN A BASE DE DATOS
+# =====================================================
 
 def get_connection():
     database_url = os.environ.get("DATABASE_URL")
 
     if not database_url:
-        raise Exception("DATABASE_URL no está configurada")
+        raise Exception("DATABASE_URL no está configurada en Render")
 
     return psycopg2.connect(
         database_url,
         cursor_factory=RealDictCursor
     )
-    
 
-# ===============================
-# AUTH HELPERS
-# ===============================
+# =====================================================
+# HELPERS AUTH
+# =====================================================
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -66,11 +65,11 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Token inválido")
 
-# ===============================
-# SYSTEM ROUTES
-# ===============================
+# =====================================================
+# RUTAS SISTEMA
+# =====================================================
 
 @app.get("/")
 def home():
@@ -80,30 +79,49 @@ def home():
 def health():
     return {"status": "healthy"}
 
-# ===============================
-# PRODUCTS
-# ===============================
+@app.get("/db-test")
+def db_test():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT NOW()")
+        result = cur.fetchone()
+        conn.close()
+        return {"database": "connected", "time": result["now"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/create-table")
-def create_table():
-    conn = get_connection()
-    cur = conn.cursor()
+# =====================================================
+# PRODUCTOS
+# =====================================================
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS products (
-        id SERIAL PRIMARY KEY,
-        name TEXT,
-        brand TEXT,
-        size TEXT,
-        color TEXT,
-        price NUMERIC,
-        stock INTEGER
-    )
-    """)
+@app.get("/create-products-table")
+def create_products_table():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    conn.commit()
-    conn.close()
-    return {"status": "products table ready"}
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            brand TEXT,
+            size TEXT,
+            color TEXT,
+            price NUMERIC,
+            stock INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "products table ready"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/add-product")
 def add_product(
@@ -115,84 +133,101 @@ def add_product(
     stock: int = Body(...),
     user=Depends(get_current_user)
 ):
-    conn = get_connection()
-    cur = conn.cursor()
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    cur.execute("""
-    INSERT INTO products (name, brand, size, color, price, stock)
-    VALUES (%s, %s, %s, %s, %s, %s)
-    RETURNING id
-    """, (name, brand, size, color, price, stock))
+        cur.execute("""
+        INSERT INTO products (name, brand, size, color, price, stock)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (name, brand, size, color, price, stock))
 
-    new_id = cur.fetchone()["id"]
+        new_id = cur.fetchone()["id"]
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
 
-    return {"status": "product added", "product_id": new_id}
+        return {"status": "product added", "product_id": new_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/products")
 def get_products():
-    conn = get_connection()
-    cur = conn.cursor()
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    cur.execute("SELECT * FROM products ORDER BY id DESC")
-    products = cur.fetchall()
+        cur.execute("SELECT * FROM products ORDER BY id DESC")
+        products = cur.fetchall()
 
-    conn.close()
-    return {"products": products}
+        conn.close()
+
+        return {"products": products}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/sell-product/{product_id}")
 def sell_product(product_id: int, quantity: int = Body(...)):
-    conn = get_connection()
-    cur = conn.cursor()
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
-    product = cur.fetchone()
+        cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
+        product = cur.fetchone()
 
-    if not product:
-        raise HTTPException(status_code=404, detail="Producto no encontrado")
+        if not product:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
 
-    if product["stock"] < quantity:
-        raise HTTPException(status_code=400, detail="Stock insuficiente")
+        if product["stock"] < quantity:
+            raise HTTPException(status_code=400, detail="Stock insuficiente")
 
-    cur.execute("""
-        UPDATE products
-        SET stock = stock - %s
-        WHERE id = %s
-    """, (quantity, product_id))
+        cur.execute("""
+            UPDATE products
+            SET stock = stock - %s
+            WHERE id = %s
+        """, (quantity, product_id))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
 
-    return {"status": "venta registrada"}
+        return {"status": "venta registrada"}
 
-# ===============================
-# USERS
-# ===============================
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================
+# USUARIOS
+# =====================================================
 
 @app.get("/create-users-table")
 def create_users_table():
-    conn = get_connection()
-    cur = conn.cursor()
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    cur.execute("DROP TABLE IF EXISTS users;")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE,
+            password TEXT,
+            role TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
 
-    cur.execute("""
-    CREATE TABLE users (
-        id SERIAL PRIMARY KEY,
-        username TEXT UNIQUE,
-        password TEXT,
-        role TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
+        conn.commit()
+        conn.close()
 
-    conn.commit()
-    conn.close()
+        return {"status": "users table ready"}
 
-    return {"status": "users table recreated clean"}
-    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/create-user")
 def create_user(
@@ -200,46 +235,58 @@ def create_user(
     password: str = Body(...),
     role: str = Body(...)
 ):
-    conn = get_connection()
-    cur = conn.cursor()
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    hashed_password = pwd_context.hash(password)
+        hashed_password = pwd_context.hash(password)
 
-    cur.execute("""
-    INSERT INTO users (username, password, role)
-    VALUES (%s, %s, %s)
-    RETURNING id
-    """, (username, hashed_password, role))
+        cur.execute("""
+        INSERT INTO users (username, password, role)
+        VALUES (%s, %s, %s)
+        RETURNING id
+        """, (username, hashed_password, role))
 
-    user_id = cur.fetchone()["id"]
+        user_id = cur.fetchone()["id"]
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
 
-    return {"status": "user created", "user_id": user_id}
+        return {"status": "user created", "user_id": user_id}
+
+    except psycopg2.errors.UniqueViolation:
+        raise HTTPException(status_code=400, detail="El usuario ya existe")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/login")
 def login(
     username: str = Body(...),
     password: str = Body(...)
 ):
-    conn = get_connection()
-    cur = conn.cursor()
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    cur.execute("SELECT * FROM users WHERE username = %s", (username,))
-    user = cur.fetchone()
+        cur.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cur.fetchone()
 
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid credentials")
+        if not user:
+            raise HTTPException(status_code=400, detail="Credenciales inválidas")
 
-    if not pwd_context.verify(password, user["password"]):
-        raise HTTPException(status_code=400, detail="Invalid credentials")
+        if not pwd_context.verify(password, user["password"]):
+            raise HTTPException(status_code=400, detail="Credenciales inválidas")
 
-    token = create_access_token({
-        "sub": user["username"],
-        "role": user["role"]
-    })
+        token = create_access_token({
+            "sub": user["username"],
+            "role": user["role"]
+        })
 
-    conn.close()
+        conn.close()
 
-    return {"access_token": token, "token_type": "bearer"}
+        return {"access_token": token, "token_type": "bearer"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
