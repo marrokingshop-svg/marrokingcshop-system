@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# conexión a postgres
+# conexión a postgres usando DATABASE_URL de Render
 def get_connection():
     return psycopg2.connect(
         os.environ.get("DATABASE_URL"),
