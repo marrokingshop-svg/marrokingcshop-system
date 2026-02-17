@@ -173,7 +173,7 @@ def sell_product(product_id: int, quantity: int = Body(...)):
 
     except Exception as e:
         return {"error": str(e)}
-        @app.get("/create-users-table")
+     @app.get("/create-users-table")
 def create_users_table():
     try:
         conn = get_connection()
@@ -195,8 +195,7 @@ def create_users_table():
 
     except Exception as e:
         return {"error": str(e)}
-
-
+        
 @app.post("/create-user")
 def create_user(
     username: str = Body(...),
@@ -225,5 +224,3 @@ def create_user(
 
     except Exception as e:
         return {"error": str(e)}
-
-       
