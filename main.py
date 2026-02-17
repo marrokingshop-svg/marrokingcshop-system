@@ -110,4 +110,38 @@ def add_product(
 
     except Exception as e:
         return {"error": str(e)}
+        from fastapi import Body
+
+@app.post("/add-product")
+def add_product(
+    name: str = Body(...),
+    brand: str = Body(...),
+    size: str = Body(...),
+    color: str = Body(...),
+    price: float = Body(...),
+    stock: int = Body(...)
+):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO products (name, brand, size, color, price, stock)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (name, brand, size, color, price, stock))
+
+        new_id = cur.fetchone()["id"]
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "product added",
+            "product_id": new_id
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
 
