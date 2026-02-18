@@ -209,7 +209,7 @@ def sell_product(product_id: int, quantity: int = Body(...)):
 # =====================================================
 
 @app.get("/low-stock")
-def low_stock():
+def low_stock(user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -394,7 +394,7 @@ def create_sale(items: list = Body(...)):
 
 
 @app.get("/sales")
-def get_sales():
+def get_sales(user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -414,7 +414,7 @@ def get_sales():
 
 
 @app.get("/sale-detail/{sale_id}")
-def sale_detail(sale_id: int):
+def sale_detail(sale_id: int, user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -439,7 +439,7 @@ def sale_detail(sale_id: int):
 # =====================================================
 
 @app.get("/sales-today")
-def sales_today():
+def sales_today(user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -463,7 +463,7 @@ def sales_today():
 
 
 @app.get("/sales-this-month")
-def sales_this_month():
+def sales_this_month(user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -487,7 +487,7 @@ def sales_this_month():
 
 
 @app.get("/sales-by-date")
-def sales_by_date(start_date: str, end_date: str):
+def sales_by_date(start_date: str, end_date: str, user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -512,7 +512,7 @@ def sales_by_date(start_date: str, end_date: str):
 
 
 @app.get("/top-products")
-def top_products():
+def top_products(user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
