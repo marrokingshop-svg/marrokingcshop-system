@@ -229,6 +229,21 @@ def get_products():
     res = cur.fetchall()
     conn.close()
     return {"products": res}
+    
+@app.delete("/products/{product_id}")
+def delete_product(product_id: int, user=Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Esta orden busca el ID específico y lo borra de la tabla
+        cur.execute("DELETE FROM products WHERE id = %s", (product_id,))
+        conn.commit()
+        return {"status": "success", "message": "Producto eliminado correctamente"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn: conn.close()
 
 @app.get("/health")
 def health(): return {"status": "online"}
