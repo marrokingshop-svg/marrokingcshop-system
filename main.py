@@ -104,13 +104,15 @@ def repair_db():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        # Agregamos meli_id si no existe
-        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS meli_id TEXT UNIQUE;")
-        # AGREGAMOS LA COLUMNA DE ESTADO (Importante para filtrar)
+        # 1. Aseguramos que las columnas existan
         cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';")
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS meli_id TEXT UNIQUE;")
+        
+        # 2. LIMPIEZA: Ponemos todos en 'active' por defecto para que no haya nulos
+        cur.execute("UPDATE products SET status = 'active' WHERE status IS NULL;")
         
         conn.commit()
-        return {"status": "Base de datos reparada con éxito"}
+        return {"status": "success", "message": "Base de datos actualizada y estados normalizados"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
