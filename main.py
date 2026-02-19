@@ -130,39 +130,56 @@ async def meli_callback(code: str = None):
 
 @app.post("/meli/sync")
 def sync_meli_products(user=Depends(get_current_user)):
-    conn = get_connection()
-    cur = conn.cursor()
-    
-    cur.execute("SELECT value FROM credentials WHERE key = 'access_token'")
-    t_row = cur.fetchone()
-    cur.execute("SELECT value FROM credentials WHERE key = 'user_id'")
-    u_row = cur.fetchone()
+    conn = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        # 1. Verificar credenciales
+        cur.execute("SELECT value FROM credentials WHERE key = 'access_token'")
+        t_row = cur.fetchone()
+        cur.execute("SELECT value FROM credentials WHERE key = 'user_id'")
+        u_row = cur.fetchone()
 
-    if not t_row or not u_row:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Vincular ML primero")
+        if not t_row or not u_row:
+            return {"status": "error", "detail": "Vincular ML primero con el botón amarillo"}
 
-    token = t_row['value']
-    user_id = u_row['value']
-    
-    headers = {"Authorization": f"Bearer {token}"}
-    search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
-    items_ids = requests.get(search_url, headers=headers).json().get("results", [])
+        token = t_row['value']
+        user_id = u_row['value']
+        
+        # 2. Obtener IDs de productos
+        headers = {"Authorization": f"Bearer {token}"}
+        search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
+        response = requests.get(search_url, headers=headers)
+        
+        if response.status_code != 200:
+            return {"status": "error", "detail": "Token de ML vencido. Vincula de nuevo."}
+            
+        items_ids = response.json().get("results", [])
 
-    count = 0
-    for m_id in items_ids:
-        detail = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers).json()
-        cur.execute("""
-            INSERT INTO products (name, price, stock, meli_id)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (meli_id) DO UPDATE 
-            SET name = EXCLUDED.name, price = EXCLUDED.price, stock = EXCLUDED.stock;
-        """, (detail.get("title"), detail.get("price"), detail.get("available_quantity"), m_id))
-        count += 1
+        # 3. Sincronizar cada producto
+        count = 0
+        for m_id in items_ids:
+            detail_resp = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers)
+            if detail_resp.status_code == 200:
+                detail = detail_resp.json()
+                cur.execute("""
+                    INSERT INTO products (name, price, stock, meli_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (meli_id) DO UPDATE 
+                    SET name = EXCLUDED.name, price = EXCLUDED.price, stock = EXCLUDED.stock;
+                """, (detail.get("title"), detail.get("price"), detail.get("available_quantity"), m_id))
+                count += 1
 
-    conn.commit()
-    conn.close()
-    return {"status": "sincronizado", "items": count}
+        conn.commit()
+        return {"status": "sincronizado", "items": count}
+
+    except Exception as e:
+        print(f"ERROR CRÍTICO: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
 
 # =====================================================
 # RUTAS GENERALES
