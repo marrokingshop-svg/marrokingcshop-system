@@ -95,6 +95,23 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
+# =====================================================
+# RUTA DE REPARACIÓN DE BASE DE DATOS
+# =====================================================
+
+@app.get("/repair-db")
+def repair_db():
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Este comando agrega la columna meli_id que falta en tu tabla
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS meli_id TEXT UNIQUE;")
+        conn.commit()
+        return {"status": "Base de datos reparada con éxito"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
 
 # =====================================================
 # RUTAS MERCADO LIBRE
