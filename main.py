@@ -66,8 +66,10 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 # =====================================================
 
 @app.get("/auth/callback")
-async def meli_callback(code: str):
-    """Recibe el código de ML y lo cambia por un token de acceso"""
+async def meli_callback(code: str = None): # Agregamos = None
+    if not code:
+        return {"status": "error", "message": "No se recibió el código de Mercado Libre"}
+    
     url = "https://api.mercadolibre.com/oauth/token"
     payload = {
         "grant_type": "authorization_code",
