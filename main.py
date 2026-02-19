@@ -224,7 +224,7 @@ def sync_meli_products(user=Depends(get_current_user)):
 def get_products():
     conn = get_connection()
     cur = conn.cursor()
-    # Especificamos 'status' para asegurar que se envíe al ERP
+    # ESENCIAL: Debemos pedir la columna 'status'
     cur.execute("SELECT id, name, price, stock, meli_id, status FROM products")
     res = cur.fetchall()
     conn.close()
