@@ -224,7 +224,8 @@ def sync_meli_products(user=Depends(get_current_user)):
 def get_products():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM products ORDER BY id DESC")
+    # Pedimos explícitamente todas las columnas, incluyendo status
+    cur.execute("SELECT id, name, price, stock, meli_id, status FROM products")
     res = cur.fetchall()
     conn.close()
     return {"products": res}
