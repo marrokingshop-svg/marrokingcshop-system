@@ -152,42 +152,50 @@ def sync_meli_products(user=Depends(get_current_user)):
         conn = get_connection()
         cur = conn.cursor()
         
-        # 1. Obtener credenciales
         cur.execute("SELECT value FROM credentials WHERE key = 'access_token'")
-        t_row = cur.fetchone()
+        token = cur.fetchone()['value']
         cur.execute("SELECT value FROM credentials WHERE key = 'user_id'")
-        u_row = cur.fetchone()
-
-        if not t_row or not u_row:
-            return {"status": "error", "detail": "Vincular ML primero"}
-
-        token = t_row['value']
-        user_id = u_row['value']
+        user_id = cur.fetchone()['value']
+        
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Pedir solo productos ACTIVOS a Mercado Libre
+        # 1. Pedir SOLO los IDs de productos con status ACTIVE
         search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search?status=active"
         response = requests.get(search_url, headers=headers)
-        
-        if response.status_code != 200:
-            return {"status": "error", "detail": "Error al conectar con ML"}
-
         items_ids = response.json().get("results", [])
 
-        # 3. Limpiar tabla para quitar los inactivos
+        # 2. LIMPIEZA TOTAL antes de insertar lo nuevo
         cur.execute("DELETE FROM products;")
 
         count = 0
         for m_id in items_ids:
+            # Pedimos el detalle profundo de cada item
             detail_resp = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers)
             if detail_resp.status_code == 200:
-                detail = detail_resp.json()
-                # Insertamos los nuevos datos limpios
-                cur.execute("""
-                    INSERT INTO products (name, price, stock, meli_id)
-                    VALUES (%s, %s, %s, %s)
-                """, (detail.get("title"), detail.get("price"), detail.get("available_quantity"), m_id))
-                count += 1
+                item = detail_resp.json()
+                
+                # VERIFICACIÓN EXTRA: Solo si el status es realmente 'active'
+                if item.get("status") == "active":
+                    
+                    # SI TIENE VARIANTES (Tallas/Colores)
+                    if item.get("variations"):
+                        for var in item["variations"]:
+                            # Armamos el nombre con su variante: "Playera - Roja - XL"
+                            var_attrs = " - ".join([attr["value_name"] for attr in var["attribute_combinations"]])
+                            full_name = f"{item['title']} ({var_attrs})"
+                            
+                            cur.execute("""
+                                INSERT INTO products (name, price, stock, meli_id)
+                                VALUES (%s, %s, %s, %s)
+                            """, (full_name, item.get("price"), var.get("available_quantity"), m_id))
+                            count += 1
+                    else:
+                        # PRODUCTO SIMPLE (Sin variantes)
+                        cur.execute("""
+                            INSERT INTO products (name, price, stock, meli_id)
+                            VALUES (%s, %s, %s, %s)
+                        """, (item.get("title"), item.get("price"), item.get("available_quantity"), m_id))
+                        count += 1
 
         conn.commit()
         return {"status": "sincronizado", "items": count}
