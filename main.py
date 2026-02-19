@@ -104,8 +104,11 @@ def repair_db():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        # Este comando agrega la columna meli_id que falta en tu tabla
+        # Agregamos meli_id si no existe
         cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS meli_id TEXT UNIQUE;")
+        # AGREGAMOS LA COLUMNA DE ESTADO (Importante para filtrar)
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';")
+        
         conn.commit()
         return {"status": "Base de datos reparada con éxito"}
     except Exception as e:
