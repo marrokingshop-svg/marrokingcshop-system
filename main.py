@@ -21,7 +21,7 @@ MELI_REDIRECT_URI = "https://marrokingcshop-api.onrender.com/auth/callback"
 # =====================================================
 # CONFIGURACIÓN DE SEGURIDAD
 # =====================================================
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.environ.get("SECRET_KEY", "MARROKING_SECRET_2024")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440 # 24 horas
