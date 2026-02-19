@@ -25,7 +25,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 security = HTTPBearer()
 
 # =====================================================
-# CORS Y PREFLIGHT (Solución a Error de Conexión)
+# CORS Y SEGURIDAD DEFINITIVA
 # =====================================================
 app.add_middleware(
     CORSMiddleware,
@@ -33,6 +33,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 @app.api_route("/{path_name:path}", methods=["OPTIONS"])
@@ -52,7 +53,7 @@ def get_connection():
 def startup_db():
     conn = get_connection()
     cur = conn.cursor()
-    # Tabla de productos
+    # Crear tablas necesarias
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
@@ -64,6 +65,12 @@ def startup_db():
         CREATE TABLE IF NOT EXISTS credentials (
             key TEXT PRIMARY KEY,
             value TEXT
+        );
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE,
+            password TEXT,
+            role TEXT
         );
     """)
     conn.commit()
@@ -108,10 +115,13 @@ async def meli_callback(code: str = None):
     if "access_token" in data:
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("INSERT INTO credentials (key, value) VALUES ('access_token', %s), ('user_id', %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (data["access_token"], str(data["user_id"])))
+        cur.execute("""
+            INSERT INTO credentials (key, value) VALUES ('access_token', %s), ('user_id', %s) 
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (data["access_token"], str(data["user_id"])))
         conn.commit()
         conn.close()
-        return {"status": "success", "message": "¡Conexión Exitosa! Ya puedes cerrar esta pestaña."}
+        return {"status": "success", "message": "Conexión Exitosa. Ya puedes cerrar esta pestaña."}
     return {"status": "error", "detail": data}
 
 @app.post("/meli/sync")
@@ -120,16 +130,16 @@ def sync_meli_products(user=Depends(get_current_user)):
     cur = conn.cursor()
     
     cur.execute("SELECT value FROM credentials WHERE key = 'access_token'")
-    token_row = cur.fetchone()
+    t_row = cur.fetchone()
     cur.execute("SELECT value FROM credentials WHERE key = 'user_id'")
-    user_id_row = cur.fetchone()
+    u_row = cur.fetchone()
 
-    if not token_row or not user_id_row:
+    if not t_row or not u_row:
         conn.close()
-        raise HTTPException(status_code=400, detail="Debes vincular ML primero")
+        raise HTTPException(status_code=400, detail="Vincular ML primero")
 
-    token = token_row['value']
-    user_id = user_id_row['value']
+    token = t_row['value']
+    user_id = u_row['value']
     
     headers = {"Authorization": f"Bearer {token}"}
     search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
@@ -177,13 +187,3 @@ def login(username: str = Body(...), password: str = Body(...)):
         raise HTTPException(status_code=400, detail="Credenciales inválidas")
     token = create_access_token({"sub": user["username"], "role": user["role"]})
     return {"access_token": token, "token_type": "bearer"}
-
-@app.post("/create-user")
-def create_user(username: str = Body(...), password: str = Body(...), role: str = Body(...)):
-    conn = get_connection()
-    cur = conn.cursor()
-    hashed = pwd_context.hash(password)
-    cur.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s)", (username, hashed, role))
-    conn.commit()
-    conn.close()
-    return {"status": "user created"}
