@@ -12,32 +12,36 @@ from datetime import datetime, timedelta
 app = FastAPI(title="Marrokingcshop System Pro")
 
 # =====================================================
-# CONFIGURACIÓN DE MERCADO LIBRE
+# CONFIGURACIÓN
 # =====================================================
 MELI_CLIENT_ID = "2347232636874610"
 MELI_CLIENT_SECRET = "cD2NU2eSj7FX1MVGZ29QxMHZyXujia5v"
 MELI_REDIRECT_URI = "https://marrokingcshop-api.onrender.com/auth/callback"
 
-# =====================================================
-# CONFIGURACIÓN DE SEGURIDAD
-# =====================================================
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.environ.get("SECRET_KEY", "MARROKING_SECRET_2024")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440 # 24 horas
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440 
 security = HTTPBearer()
 
+# =====================================================
+# CORS Y PREFLIGHT (Solución a Error de Conexión)
+# =====================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], # Permitir todos para evitar bloqueos de caché
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
 )
 
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(request: Request, rest_of_path: str):
+    return {}
+
 # =====================================================
-# CONEXIÓN A BASE DE DATOS
+# BASE DE DATOS
 # =====================================================
 def get_connection():
     database_url = os.environ.get("DATABASE_URL")
@@ -45,8 +49,29 @@ def get_connection():
         raise Exception("DATABASE_URL no está configurada")
     return psycopg2.connect(database_url, cursor_factory=RealDictCursor)
 
+@app.on_event("startup")
+def startup_db():
+    conn = get_connection()
+    cur = conn.cursor()
+    # Tabla de productos
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            price NUMERIC,
+            stock INTEGER,
+            meli_id TEXT UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS credentials (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
+
 # =====================================================
-# HELPERS AUTH
+# HELPERS
 # =====================================================
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -55,21 +80,19 @@ def create_access_token(data: dict):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
 
 # =====================================================
-# RUTAS DE MERCADO LIBRE
+# RUTAS MERCADO LIBRE
 # =====================================================
 
 @app.get("/auth/callback")
 async def meli_callback(code: str = None):
-    if not code:
-        return {"status": "error", "message": "Falta el código de autorización"}
+    if not code: return {"status": "error", "message": "Falta code"}
     
     url = "https://api.mercadolibre.com/oauth/token"
     payload = {
@@ -84,26 +107,35 @@ async def meli_callback(code: str = None):
     data = resp.json()
     
     if "access_token" in data:
-        os.environ["MELI_ACCESS_TOKEN"] = data["access_token"]
-        os.environ["MELI_USER_ID"] = str(data["user_id"])
-        return {"status": "success", "message": "¡Conexión Exitosa con Mercado Libre! Ya puedes volver a tu ERP."}
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO credentials (key, value) VALUES ('access_token', %s), ('user_id', %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (data["access_token"], str(data["user_id"])))
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "¡Conexión Exitosa! Ya puedes cerrar esta pestaña."}
     return {"status": "error", "detail": data}
 
 @app.post("/meli/sync")
 def sync_meli_products(user=Depends(get_current_user)):
-    token = os.environ.get("MELI_ACCESS_TOKEN")
-    user_id = os.environ.get("MELI_USER_ID")
+    conn = get_connection()
+    cur = conn.cursor()
     
-    if not token:
-        raise HTTPException(status_code=400, detail="Debes vincular tu cuenta de ML primero")
+    cur.execute("SELECT value FROM credentials WHERE key = 'access_token'")
+    token_row = cur.fetchone()
+    cur.execute("SELECT value FROM credentials WHERE key = 'user_id'")
+    user_id_row = cur.fetchone()
 
+    if not token_row or not user_id_row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Debes vincular ML primero")
+
+    token = token_row['value']
+    user_id = user_id_row['value']
+    
     headers = {"Authorization": f"Bearer {token}"}
     search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
     items_ids = requests.get(search_url, headers=headers).json().get("results", [])
 
-    conn = get_connection()
-    cur = conn.cursor()
-    
     count = 0
     for m_id in items_ids:
         detail = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers).json()
@@ -120,29 +152,8 @@ def sync_meli_products(user=Depends(get_current_user)):
     return {"status": "sincronizado", "items": count}
 
 # =====================================================
-# RUTAS DE PRODUCTOS Y TABLAS
+# RUTAS GENERALES
 # =====================================================
-
-@app.get("/create-products-table")
-def create_products_table():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id SERIAL PRIMARY KEY,
-            name TEXT,
-            brand TEXT,
-            size TEXT,
-            color TEXT,
-            price NUMERIC,
-            stock INTEGER,
-            meli_id TEXT UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
-    return {"status": "Tabla actualizada"}
 
 @app.get("/products")
 def get_products():
@@ -162,6 +173,7 @@ def login(username: str = Body(...), password: str = Body(...)):
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE username = %s", (username,))
     user = cur.fetchone()
+    conn.close()
     if not user or not pwd_context.verify(password, user["password"]):
         raise HTTPException(status_code=400, detail="Credenciales inválidas")
     token = create_access_token({"sub": user["username"], "role": user["role"]})
