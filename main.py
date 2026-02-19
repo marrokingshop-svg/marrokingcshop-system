@@ -29,15 +29,14 @@ security = HTTPBearer()
 # =====================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permitir todos para evitar bloqueos de caché
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
 )
 
-@app.options("/{rest_of_path:path}")
-async def preflight_handler(request: Request, rest_of_path: str):
+@app.api_route("/{path_name:path}", methods=["OPTIONS"])
+async def handle_options(request: Request, path_name: str):
     return {}
 
 # =====================================================
