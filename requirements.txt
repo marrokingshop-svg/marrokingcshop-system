@@ -2,6 +2,6 @@ fastapi
 uvicorn
 psycopg2-binary
 requests
-passlib
 python-jose[cryptography]
-bcrypt
+passlib[bcrypt]
+bcrypt==4.0.1
