@@ -1,35 +1,31 @@
-from fastapi import FastAPI, Body, HTTPException, Depends
+from fastapi import FastAPI, Body, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import os
 import psycopg2
+import requests
 from psycopg2.extras import RealDictCursor
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 
-app = FastAPI(title="Marrokingcshop System")
+app = FastAPI(title="Marrokingcshop System Pro")
+
+# =====================================================
+# CONFIGURACIÓN DE MERCADO LIBRE
+# =====================================================
+MELI_CLIENT_ID = "2347232636874610"
+MELI_CLIENT_SECRET = "cD2NU2eSj7FX1MVGZ29QxMHZyXujia5v"
+MELI_REDIRECT_URI = "https://marrokingcshop-api.onrender.com/auth/callback"
 
 # =====================================================
 # CONFIGURACIÓN DE SEGURIDAD
 # =====================================================
-
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12
-)
-
-
-SECRET_KEY = os.environ.get("SECRET_KEY", "CAMBIAR_ESTO_POR_ALGO_SUPER_SEGURO")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+SECRET_KEY = os.environ.get("SECRET_KEY", "MARROKING_SECRET_2024")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 día
 security = HTTPBearer()
-
-# =====================================================
-# CORS
-# =====================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,22 +38,15 @@ app.add_middleware(
 # =====================================================
 # CONEXIÓN A BASE DE DATOS
 # =====================================================
-
 def get_connection():
     database_url = os.environ.get("DATABASE_URL")
-
     if not database_url:
-        raise Exception("DATABASE_URL no está configurada en Render")
-
-    return psycopg2.connect(
-        database_url,
-        cursor_factory=RealDictCursor
-    )
+        raise Exception("DATABASE_URL no está configurada")
+    return psycopg2.connect(database_url, cursor_factory=RealDictCursor)
 
 # =====================================================
 # HELPERS AUTH
 # =====================================================
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -73,31 +62,73 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Token inválido")
 
 # =====================================================
-# RUTAS SISTEMA
+# RUTAS DE MERCADO LIBRE (NUEVAS)
 # =====================================================
 
-@app.get("/")
-def home():
-    return {"message": "Marrokingcshop System is Running", "status": "online"}
+@app.get("/auth/callback")
+async def meli_callback(code: str):
+    """Recibe el código de ML y lo cambia por un token de acceso"""
+    url = "https://api.mercadolibre.com/oauth/token"
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": MELI_CLIENT_ID,
+        "client_secret": MELI_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": MELI_REDIRECT_URI
+    }
+    
+    resp = requests.post(url, data=payload)
+    data = resp.json()
+    
+    if "access_token" in data:
+        # Aquí guardamos el token globalmente o en la BD para simplificar tu uso
+        os.environ["MELI_ACCESS_TOKEN"] = data["access_token"]
+        os.environ["MELI_USER_ID"] = str(data["user_id"])
+        return {"status": "success", "message": "Conectado a Mercado Libre correctamente. Ya puedes cerrar esta pestaña."}
+    return {"status": "error", "detail": data}
 
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
+@app.post("/meli/sync")
+def sync_meli_products(user=Depends(get_current_user)):
+    """Descarga productos de ML y los guarda en la base de datos local"""
+    token = os.environ.get("MELI_ACCESS_TOKEN")
+    user_id = os.environ.get("MELI_USER_ID")
+    
+    if not token:
+        raise HTTPException(status_code=400, detail="Primero debes vincular tu cuenta de Mercado Libre")
 
-@app.get("/db-test")
-def db_test():
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT NOW()")
-        result = cur.fetchone()
-        conn.close()
-        return {"database": "connected", "time": result["now"]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # 1. Buscar IDs de productos del usuario
+    search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
+    items_ids = requests.get(search_url, headers=headers).json().get("results", [])
+
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    synced_count = 0
+    for m_id in items_ids:
+        # 2. Obtener detalle de cada producto
+        detail = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers).json()
+        
+        name = detail.get("title")
+        price = detail.get("price")
+        stock = detail.get("available_quantity")
+        
+        # 3. Insertar o Actualizar en la BD (UPSERT)
+        cur.execute("""
+            INSERT INTO products (name, price, stock, meli_id)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (meli_id) DO UPDATE 
+            SET name = EXCLUDED.name, price = EXCLUDED.price, stock = EXCLUDED.stock;
+        """, (name, price, stock, m_id))
+        synced_count += 1
+
+    conn.commit()
+    conn.close()
+    return {"status": "sincronizado", "cantidad": synced_count}
 
 # =====================================================
-# PRODUCTOS
+# PRODUCTOS (ACTUALIZADO)
 # =====================================================
 
 @app.get("/create-products-table")
@@ -105,7 +136,6 @@ def create_products_table():
     try:
         conn = get_connection()
         cur = conn.cursor()
-
         cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
@@ -115,517 +145,86 @@ def create_products_table():
             color TEXT,
             price NUMERIC,
             stock INTEGER,
+            meli_id TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
-
         conn.commit()
         conn.close()
-
-        return {"status": "products table ready"}
-
+        return {"status": "Tabla de productos actualizada con soporte para Mercado Libre"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/add-product")
-def add_product(
-    name: str = Body(...),
-    brand: str = Body(...),
-    size: str = Body(...),
-    color: str = Body(...),
-    price: float = Body(...),
-    stock: int = Body(...),
-    user=Depends(get_current_user)
-):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        INSERT INTO products (name, brand, size, color, price, stock)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """, (name, brand, size, color, price, stock))
-
-        new_id = cur.fetchone()["id"]
-
-        conn.commit()
-        conn.close()
-
-        return {"status": "product added", "product_id": new_id}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/products")
 def get_products():
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        cur.execute("SELECT * FROM products ORDER BY id DESC")
+        cur.execute("SELECT * FROM products ORDER BY meli_id NULLS LAST, id DESC")
         products = cur.fetchall()
-
         conn.close()
-
         return {"products": products}
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.post("/sell-product/{product_id}")
-def sell_product(product_id: int, quantity: int = Body(...)):
+@app.post("/products/add")
+def add_product_manual(data: dict = Body(...), user=Depends(get_current_user)):
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
-        product = cur.fetchone()
-
-        if not product:
-            raise HTTPException(status_code=404, detail="Producto no encontrado")
-
-        if product["stock"] < quantity:
-            raise HTTPException(status_code=400, detail="Stock insuficiente")
-
         cur.execute("""
-            UPDATE products
-            SET stock = stock - %s
-            WHERE id = %s
-        """, (quantity, product_id))
-
+            INSERT INTO products (name, price, stock)
+            VALUES (%s, %s, %s) RETURNING id
+        """, (data['name'], data['price'], data['stock']))
+        new_id = cur.fetchone()["id"]
         conn.commit()
         conn.close()
-
-        return {"status": "venta registrada"}
-
+        return {"status": "success", "id": new_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-# =====================================================
-# INVENTARIO AVANZADO ERP
-# =====================================================
-
-@app.get("/low-stock")
-def low_stock(user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT * FROM products
-        WHERE stock < 10
-        ORDER BY stock ASC
-        """)
-
-        products = cur.fetchall()
-
-        conn.close()
-
-        return {
-            "alert": "Productos con stock menor a 10",
-            "count": len(products),
-            "products": products
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.put("/update-product/{product_id}")
-def update_product(
-    product_id: int,
-    name: str = Body(...),
-    brand: str = Body(...),
-    size: str = Body(...),
-    color: str = Body(...),
-    price: float = Body(...),
-    stock: int = Body(...)
-):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        UPDATE products
-        SET name=%s, brand=%s, size=%s, color=%s, price=%s, stock=%s
-        WHERE id=%s
-        RETURNING id
-        """, (name, brand, size, color, price, stock, product_id))
-
-        updated = cur.fetchone()
-
-        if not updated:
-            raise HTTPException(status_code=404, detail="Producto no encontrado")
-
-        conn.commit()
-        conn.close()
-
-        return {"status": "producto actualizado", "product_id": product_id}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.put("/adjust-stock/{product_id}")
-def adjust_stock(product_id: int, new_stock: int = Body(...)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        UPDATE products
-        SET stock = %s
-        WHERE id = %s
-        RETURNING id
-        """, (new_stock, product_id))
-
-        updated = cur.fetchone()
-
-        if not updated:
-            raise HTTPException(status_code=404, detail="Producto no encontrado")
-
-        conn.commit()
-        conn.close()
-
-        return {"status": "stock actualizado", "new_stock": new_stock}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# =====================================================
-# VENTAS PROFESIONALES ERP
-# =====================================================
-
-@app.get("/create-sales-tables")
-def create_sales_tables():
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        # Tabla principal de ventas
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS sales (
-            id SERIAL PRIMARY KEY,
-            total NUMERIC,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-
-        # Detalle de productos vendidos
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS sale_items (
-            id SERIAL PRIMARY KEY,
-            sale_id INTEGER REFERENCES sales(id) ON DELETE CASCADE,
-            product_id INTEGER REFERENCES products(id),
-            quantity INTEGER,
-            price NUMERIC
-        )
-        """)
-
-        conn.commit()
-        conn.close()
-
-        return {"status": "sales tables ready"}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/create-sale")
-def create_sale(items: list = Body(...)):
-    """
-    items = [
-        {"product_id": 1, "quantity": 2},
-        {"product_id": 3, "quantity": 1}
-    ]
-    """
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        total = 0
-
-        # Verificar stock y calcular total
-        for item in items:
-            cur.execute("SELECT price, stock FROM products WHERE id = %s", (item["product_id"],))
-            product = cur.fetchone()
-
-            if not product:
-                raise HTTPException(status_code=404, detail="Producto no encontrado")
-
-            if product["stock"] < item["quantity"]:
-                raise HTTPException(status_code=400, detail="Stock insuficiente")
-
-            total += float(product["price"]) * item["quantity"]
-
-        # Crear venta
-        cur.execute("INSERT INTO sales (total) VALUES (%s) RETURNING id", (total,))
-        sale_id = cur.fetchone()["id"]
-
-        # Insertar detalle y descontar stock
-        for item in items:
-            cur.execute("SELECT price FROM products WHERE id = %s", (item["product_id"],))
-            product = cur.fetchone()
-
-            cur.execute("""
-                INSERT INTO sale_items (sale_id, product_id, quantity, price)
-                VALUES (%s, %s, %s, %s)
-            """, (sale_id, item["product_id"], item["quantity"], product["price"]))
-
-            cur.execute("""
-                UPDATE products
-                SET stock = stock - %s
-                WHERE id = %s
-            """, (item["quantity"], item["product_id"]))
-
-        conn.commit()
-        conn.close()
-
-        return {
-            "status": "venta registrada",
-            "sale_id": sale_id,
-            "total": total
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/sales")
-def get_sales(user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT * FROM sales
-        ORDER BY id DESC
-        """)
-        sales = cur.fetchall()
-
-        conn.close()
-
-        return {"sales": sales}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/sale-detail/{sale_id}")
-def sale_detail(sale_id: int, user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT p.name, si.quantity, si.price
-        FROM sale_items si
-        JOIN products p ON p.id = si.product_id
-        WHERE si.sale_id = %s
-        """, (sale_id,))
-
-        items = cur.fetchall()
-
-        conn.close()
-
-        return {"sale_id": sale_id, "items": items}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# =====================================================
-# REPORTES FINANCIEROS
-# =====================================================
-
-@app.get("/sales-today")
-def sales_today(user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT COALESCE(SUM(total),0) as total_today
-        FROM sales
-        WHERE DATE(created_at) = CURRENT_DATE
-        """)
-
-        result = cur.fetchone()
-        conn.close()
-
-        return {
-            "date": str(datetime.utcnow().date()),
-            "total_today": float(result["total_today"])
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/sales-this-month")
-def sales_this_month(user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT COALESCE(SUM(total),0) as total_month
-        FROM sales
-        WHERE DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
-        """)
-
-        result = cur.fetchone()
-        conn.close()
-
-        return {
-            "month": str(datetime.utcnow().month),
-            "total_this_month": float(result["total_month"])
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/sales-by-date")
-def sales_by_date(start_date: str, end_date: str, user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT COALESCE(SUM(total),0) as total_range
-        FROM sales
-        WHERE DATE(created_at) BETWEEN %s AND %s
-        """, (start_date, end_date))
-
-        result = cur.fetchone()
-        conn.close()
-
-        return {
-            "start_date": start_date,
-            "end_date": end_date,
-            "total": float(result["total_range"])
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/top-products")
-def top_products(user=Depends(get_current_user)):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        SELECT p.name, SUM(si.quantity) as total_sold
-        FROM sale_items si
-        JOIN products p ON p.id = si.product_id
-        GROUP BY p.name
-        ORDER BY total_sold DESC
-        LIMIT 5
-        """)
-
-        products = cur.fetchall()
-        conn.close()
-
-        return {
-            "top_products": products
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
 
 # =====================================================
-# USUARIOS
+# RUTAS BASE (LOGIN Y MANTENIMIENTO)
 # =====================================================
+
+@app.get("/health")
+def health(): return {"status": "online"}
+
+@app.post("/login")
+def login(username: str = Body(...), password: str = Body(...)):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE username = %s", (username,))
+    user = cur.fetchone()
+    if not user or not pwd_context.verify(password, user["password"]):
+        raise HTTPException(status_code=400, detail="Credenciales inválidas")
+    
+    token = create_access_token({"sub": user["username"], "role": user["role"]})
+    return {"access_token": token, "token_type": "bearer"}
 
 @app.get("/create-users-table")
 def create_users_table():
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE,
-            password TEXT,
-            role TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-
-        conn.commit()
-        conn.close()
-
-        return {"status": "users table ready"}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE,
+        password TEXT,
+        role TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    conn.commit()
+    conn.close()
+    return {"status": "users table ready"}
 
 @app.post("/create-user")
-def create_user(
-    username: str = Body(...),
-    password: str = Body(...),
-    role: str = Body(...)
-):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        hashed_password = pwd_context.hash(password)
-
-        cur.execute("""
-        INSERT INTO users (username, password, role)
-        VALUES (%s, %s, %s)
-        RETURNING id
-        """, (username, hashed_password, role))
-
-        user_id = cur.fetchone()["id"]
-
-        conn.commit()
-        conn.close()
-
-        return {"status": "user created", "user_id": user_id}
-
-    except psycopg2.errors.UniqueViolation:
-        raise HTTPException(status_code=400, detail="El usuario ya existe")
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/login")
-def login(
-    username: str = Body(...),
-    password: str = Body(...)
-):
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("SELECT * FROM users WHERE username = %s", (username,))
-        user = cur.fetchone()
-
-        if not user:
-            raise HTTPException(status_code=400, detail="Credenciales inválidas")
-
-        if not pwd_context.verify(password, user["password"]):
-            raise HTTPException(status_code=400, detail="Credenciales inválidas")
-
-        token = create_access_token({
-            "sub": user["username"],
-            "role": user["role"]
-        })
-
-        conn.close()
-
-        return {"access_token": token, "token_type": "bearer"}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def create_user(username: str = Body(...), password: str = Body(...), role: str = Body(...)):
+    conn = get_connection()
+    cur = conn.cursor()
+    hashed = pwd_context.hash(password)
+    cur.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s)", (username, hashed, role))
+    conn.commit()
+    conn.close()
+    return {"status": "user created"}
