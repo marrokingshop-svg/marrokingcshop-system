@@ -162,8 +162,8 @@ def sync_meli_products(user=Depends(get_current_user)):
         
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 1. Pedir IDs activos
-        search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search?status=active"
+        # 1. Pedir IDs activos y pausados (quitamos el filtro de status=active para ver todo)
+        search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
         response = requests.get(search_url, headers=headers)
         items_ids = response.json().get("results", [])
 
@@ -173,7 +173,6 @@ def sync_meli_products(user=Depends(get_current_user)):
             if detail_resp.status_code == 200:
                 item = detail_resp.json()
                 
-                # Procesamos tanto productos simples como variantes
                 products_to_process = []
                 if item.get("variations"):
                     for var in item["variations"]:
@@ -182,27 +181,30 @@ def sync_meli_products(user=Depends(get_current_user)):
                             "name": f"{item['title']} ({var_attrs})",
                             "price": item.get("price"),
                             "stock": var.get("available_quantity"),
-                            "meli_id": f"{m_id}-{var['id']}" # ID único para variante
+                            "meli_id": f"{m_id}-{var['id']}",
+                            "status": item.get("status") # Guardamos el estado real
                         })
                 else:
                     products_to_process.append({
                         "name": item.get("title"),
                         "price": item.get("price"),
                         "stock": item.get("available_quantity"),
-                        "meli_id": m_id
+                        "meli_id": m_id,
+                        "status": item.get("status") # Guardamos el estado real
                     })
 
                 for p in products_to_process:
-                    # UPSERT: Si el meli_id ya existe, actualiza. Si no, inserta.
+                    # Actualizamos también la columna 'status'
                     cur.execute("""
-                        INSERT INTO products (name, price, stock, meli_id)
-                        VALUES (%s, %s, %s, %s)
+                        INSERT INTO products (name, price, stock, meli_id, status)
+                        VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (meli_id) 
                         DO UPDATE SET 
                             name = EXCLUDED.name,
                             price = EXCLUDED.price,
-                            stock = EXCLUDED.stock;
-                    """, (p["name"], p["price"], p["stock"], p["meli_id"]))
+                            stock = EXCLUDED.stock,
+                            status = EXCLUDED.status; 
+                    """, (p["name"], p["price"], p["stock"], p["meli_id"], p["status"]))
                     count += 1
 
         conn.commit()
