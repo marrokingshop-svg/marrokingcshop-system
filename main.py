@@ -159,43 +159,48 @@ def sync_meli_products(user=Depends(get_current_user)):
         
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 1. Pedir SOLO los IDs de productos con status ACTIVE
+        # 1. Pedir IDs activos
         search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search?status=active"
         response = requests.get(search_url, headers=headers)
         items_ids = response.json().get("results", [])
 
-        # 2. LIMPIEZA TOTAL antes de insertar lo nuevo
-        cur.execute("DELETE FROM products;")
-
         count = 0
         for m_id in items_ids:
-            # Pedimos el detalle profundo de cada item
             detail_resp = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers)
             if detail_resp.status_code == 200:
                 item = detail_resp.json()
                 
-                # VERIFICACIÓN EXTRA: Solo si el status es realmente 'active'
-                if item.get("status") == "active":
-                    
-                    # SI TIENE VARIANTES (Tallas/Colores)
-                    if item.get("variations"):
-                        for var in item["variations"]:
-                            # Armamos el nombre con su variante: "Playera - Roja - XL"
-                            var_attrs = " - ".join([attr["value_name"] for attr in var["attribute_combinations"]])
-                            full_name = f"{item['title']} ({var_attrs})"
-                            
-                            cur.execute("""
-                                INSERT INTO products (name, price, stock, meli_id)
-                                VALUES (%s, %s, %s, %s)
-                            """, (full_name, item.get("price"), var.get("available_quantity"), m_id))
-                            count += 1
-                    else:
-                        # PRODUCTO SIMPLE (Sin variantes)
-                        cur.execute("""
-                            INSERT INTO products (name, price, stock, meli_id)
-                            VALUES (%s, %s, %s, %s)
-                        """, (item.get("title"), item.get("price"), item.get("available_quantity"), m_id))
-                        count += 1
+                # Procesamos tanto productos simples como variantes
+                products_to_process = []
+                if item.get("variations"):
+                    for var in item["variations"]:
+                        var_attrs = " - ".join([attr["value_name"] for attr in var["attribute_combinations"]])
+                        products_to_process.append({
+                            "name": f"{item['title']} ({var_attrs})",
+                            "price": item.get("price"),
+                            "stock": var.get("available_quantity"),
+                            "meli_id": f"{m_id}-{var['id']}" # ID único para variante
+                        })
+                else:
+                    products_to_process.append({
+                        "name": item.get("title"),
+                        "price": item.get("price"),
+                        "stock": item.get("available_quantity"),
+                        "meli_id": m_id
+                    })
+
+                for p in products_to_process:
+                    # UPSERT: Si el meli_id ya existe, actualiza. Si no, inserta.
+                    cur.execute("""
+                        INSERT INTO products (name, price, stock, meli_id)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (meli_id) 
+                        DO UPDATE SET 
+                            name = EXCLUDED.name,
+                            price = EXCLUDED.price,
+                            stock = EXCLUDED.stock;
+                    """, (p["name"], p["price"], p["stock"], p["meli_id"]))
+                    count += 1
 
         conn.commit()
         return {"status": "sincronizado", "items": count}
