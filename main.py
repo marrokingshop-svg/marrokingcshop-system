@@ -40,6 +40,10 @@ app.add_middleware(
 async def handle_options(request: Request, path_name: str):
     return {}
 
+@app.get("/despertar")
+def despertar():
+    return {"status": "servidor despierto y listo"}
+
 # =====================================================
 # BASE DE DATOS
 # =====================================================
