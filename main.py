@@ -29,10 +29,12 @@ security = HTTPBearer()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://marrokingshop-svg.github.io",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000"
+    allow_origins=["*"],  # El asterisco permite cualquier origen y suele saltar el error de caché
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
     ],
     allow_credentials=True,
     allow_methods=["*"],
