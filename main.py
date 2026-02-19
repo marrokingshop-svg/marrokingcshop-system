@@ -21,11 +21,11 @@ MELI_REDIRECT_URI = "https://marrokingcshop-api.onrender.com/auth/callback"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.environ.get("SECRET_KEY", "MARROKING_SECRET_2024")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440 
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 security = HTTPBearer()
 
 # =====================================================
-# CORS Y SEGURIDAD DEFINITIVA
+# CORS
 # =====================================================
 app.add_middleware(
     CORSMiddleware,
@@ -40,9 +40,9 @@ app.add_middleware(
 async def handle_options(request: Request, path_name: str):
     return {}
 
-@app.get("/despertar")
-def despertar():
-    return {"status": "servidor despierto y listo"}
+@app.get("/health")
+def health():
+    return {"status": "online"}
 
 # =====================================================
 # BASE DE DATOS
@@ -50,26 +50,29 @@ def despertar():
 def get_connection():
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        raise Exception("DATABASE_URL no está configurada")
+        raise Exception("DATABASE_URL no configurada")
     return psycopg2.connect(database_url, cursor_factory=RealDictCursor)
 
 @app.on_event("startup")
 def startup_db():
     conn = get_connection()
     cur = conn.cursor()
-    # Crear tablas necesarias
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
             name TEXT,
             price NUMERIC,
             stock INTEGER,
-            meli_id TEXT UNIQUE
+            meli_id TEXT UNIQUE,
+            status TEXT DEFAULT 'active'
         );
+        
         CREATE TABLE IF NOT EXISTS credentials (
             key TEXT PRIMARY KEY,
             value TEXT
         );
+        
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT UNIQUE,
@@ -77,11 +80,12 @@ def startup_db():
             role TEXT
         );
     """)
+
     conn.commit()
     conn.close()
 
 # =====================================================
-# HELPERS
+# SEGURIDAD
 # =====================================================
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -95,37 +99,15 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
-# =====================================================
-# RUTA DE REPARACIÓN DE BASE DE DATOS
-# =====================================================
-
-@app.get("/repair-db")
-def repair_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        # 1. Aseguramos que las columnas existan
-        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';")
-        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS meli_id TEXT UNIQUE;")
-        
-        # 2. LIMPIEZA: Ponemos todos en 'active' por defecto para que no haya nulos
-        cur.execute("UPDATE products SET status = 'active' WHERE status IS NULL;")
-        
-        conn.commit()
-        return {"status": "success", "message": "Base de datos actualizada y estados normalizados"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        conn.close()
 
 # =====================================================
-# RUTAS MERCADO LIBRE
+# AUTH MERCADO LIBRE
 # =====================================================
-
 @app.get("/auth/callback")
 async def meli_callback(code: str = None):
-    if not code: return {"status": "error", "message": "Falta code"}
-    
+    if not code:
+        return {"status": "error", "message": "Falta code"}
+
     url = "https://api.mercadolibre.com/oauth/token"
     payload = {
         "grant_type": "authorization_code",
@@ -134,130 +116,196 @@ async def meli_callback(code: str = None):
         "code": code,
         "redirect_uri": MELI_REDIRECT_URI
     }
-    
+
     resp = requests.post(url, data=payload)
     data = resp.json()
-    
+
     if "access_token" in data:
         conn = get_connection()
         cur = conn.cursor()
+
         cur.execute("""
-            INSERT INTO credentials (key, value) VALUES ('access_token', %s), ('user_id', %s) 
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            INSERT INTO credentials (key, value)
+            VALUES ('access_token', %s), ('user_id', %s)
+            ON CONFLICT (key)
+            DO UPDATE SET value = EXCLUDED.value
         """, (data["access_token"], str(data["user_id"])))
+
         conn.commit()
         conn.close()
-        return {"status": "success", "message": "Conexión Exitosa. Ya puedes cerrar esta pestaña."}
+
+        return {"status": "success", "message": "Conectado a Mercado Libre"}
+
     return {"status": "error", "detail": data}
 
+# =====================================================
+# SINCRONIZAR PRODUCTOS (VERSIÓN CORREGIDA)
+# =====================================================
 @app.post("/meli/sync")
 def sync_meli_products(user=Depends(get_current_user)):
     conn = None
     try:
         conn = get_connection()
         cur = conn.cursor()
-        
-        cur.execute("SELECT value FROM credentials WHERE key = 'access_token'")
-        token = cur.fetchone()['value']
-        cur.execute("SELECT value FROM credentials WHERE key = 'user_id'")
-        user_id = cur.fetchone()['value']
-        
+
+        # Obtener credenciales
+        cur.execute("SELECT value FROM credentials WHERE key='access_token'")
+        token_row = cur.fetchone()
+        cur.execute("SELECT value FROM credentials WHERE key='user_id'")
+        user_row = cur.fetchone()
+
+        if not token_row or not user_row:
+            raise HTTPException(status_code=400, detail="Mercado Libre no vinculado")
+
+        token = token_row["value"]
+        user_id = user_row["value"]
+
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 1. Pedir IDs activos y pausados (quitamos el filtro de status=active para ver todo)
-        search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search?limit=1000"
-        response = requests.get(search_url, headers=headers)
-        items_ids = response.json().get("results", [])
+        # =====================================================
+        # OBTENER TODOS LOS ITEMS (SCAN REAL)
+        # =====================================================
+        items_ids = []
+        url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
 
+        params = {
+            "search_type": "scan",
+            "limit": 100
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+
+        scroll_id = data.get("scroll_id")
+        items_ids.extend(data.get("results", []))
+
+        while True:
+            params = {
+                "search_type": "scan",
+                "scroll_id": scroll_id
+            }
+
+            response = requests.get(url, headers=headers, params=params)
+            data = response.json()
+
+            results = data.get("results", [])
+            if not results:
+                break
+
+            items_ids.extend(results)
+            scroll_id = data.get("scroll_id")
+
+        # =====================================================
+        # GUARDAR PRODUCTOS
+        # =====================================================
         count = 0
-        for m_id in items_ids:
-            detail_resp = requests.get(f"https://api.mercadolibre.com/items/{m_id}", headers=headers)
-            if detail_resp.status_code == 200:
-                item = detail_resp.json()
-                
-                products_to_process = []
-                if item.get("variations"):
-                    for var in item["variations"]:
-                        var_attrs = " - ".join([attr["value_name"] for attr in var["attribute_combinations"]])
-                        products_to_process.append({
-                            "name": f"{item['title']} ({var_attrs})",
-                            "price": item.get("price"),
-                            "stock": var.get("available_quantity"),
-                            "meli_id": f"{m_id}-{var['id']}",
-                            "status": item.get("status") # Guardamos el estado real
-                        })
-                else:
-                    products_to_process.append({
-                        "name": item.get("title"),
-                        "price": item.get("price"),
-                        "stock": item.get("available_quantity"),
-                        "meli_id": m_id,
-                        "status": item.get("status") # Guardamos el estado real
-                    })
 
-                for p in products_to_process:
-                    # Actualizamos también la columna 'status'
-                    cur.execute("""
-                        INSERT INTO products (name, price, stock, meli_id, status)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (meli_id) 
-                        DO UPDATE SET 
-                            name = EXCLUDED.name,
-                            price = EXCLUDED.price,
-                            stock = EXCLUDED.stock,
-                            status = EXCLUDED.status; 
-                    """, (p["name"], p["price"], p["stock"], p["meli_id"], p["status"]))
-                    count += 1
+        for m_id in items_ids:
+            detail_resp = requests.get(
+                f"https://api.mercadolibre.com/items/{m_id}",
+                headers=headers
+            )
+
+            if detail_resp.status_code != 200:
+                continue
+
+            item = detail_resp.json()
+            status = item.get("status", "active")
+
+            products_to_process = []
+
+            if item.get("variations"):
+                for var in item["variations"]:
+                    attrs = " - ".join(
+                        [a["value_name"] for a in var["attribute_combinations"]]
+                    )
+
+                    products_to_process.append({
+                        "name": f"{item['title']} ({attrs})",
+                        "price": item.get("price"),
+                        "stock": var.get("available_quantity"),
+                        "meli_id": f"{m_id}-{var['id']}",
+                        "status": status
+                    })
+            else:
+                products_to_process.append({
+                    "name": item.get("title"),
+                    "price": item.get("price"),
+                    "stock": item.get("available_quantity"),
+                    "meli_id": m_id,
+                    "status": status
+                })
+
+            for p in products_to_process:
+                cur.execute("""
+                    INSERT INTO products (name, price, stock, meli_id, status)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (meli_id)
+                    DO UPDATE SET
+                        name = EXCLUDED.name,
+                        price = EXCLUDED.price,
+                        stock = EXCLUDED.stock,
+                        status = EXCLUDED.status;
+                """, (
+                    p["name"],
+                    p["price"],
+                    p["stock"],
+                    p["meli_id"],
+                    p["status"]
+                ))
+                count += 1
 
         conn.commit()
-        return {"status": "sincronizado", "items": count}
+        return {
+            "status": "sincronizado",
+            "total_items_meli": len(items_ids),
+            "productos_guardados": count
+        }
 
     except Exception as e:
-        if conn: conn.rollback()
+        if conn:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
 # =====================================================
-# RUTAS GENERALES
+# PRODUCTOS
 # =====================================================
-
 @app.get("/products")
 def get_products():
     conn = get_connection()
     cur = conn.cursor()
-    # ESENCIAL: Debemos pedir la columna 'status'
-    cur.execute("SELECT id, name, price, stock, meli_id, status FROM products")
+
+    cur.execute("""
+        SELECT id, name, price, stock, meli_id, status
+        FROM products
+        ORDER BY id DESC
+    """)
+
     res = cur.fetchall()
     conn.close()
     return {"products": res}
-    
-@app.delete("/products/{product_id}")
-def delete_product(product_id: int, user=Depends(get_current_user)):
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        # Esta orden busca el ID específico y lo borra de la tabla
-        cur.execute("DELETE FROM products WHERE id = %s", (product_id,))
-        conn.commit()
-        return {"status": "success", "message": "Producto eliminado correctamente"}
-    except Exception as e:
-        if conn: conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
-@app.get("/health")
-def health(): return {"status": "online"}
-
+# =====================================================
+# LOGIN
+# =====================================================
 @app.post("/login")
 def login(username: str = Body(...), password: str = Body(...)):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE username = %s", (username,))
+
+    cur.execute("SELECT * FROM users WHERE username=%s", (username,))
     user = cur.fetchone()
     conn.close()
+
     if not user or not pwd_context.verify(password, user["password"]):
         raise HTTPException(status_code=400, detail="Credenciales inválidas")
-    token = create_access_token({"sub": user["username"], "role": user["role"]})
+
+    token = create_access_token({
+        "sub": user["username"],
+        "role": user["role"]
+    })
+
     return {"access_token": token, "token_type": "bearer"}
