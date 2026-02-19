@@ -163,7 +163,7 @@ def sync_meli_products(user=Depends(get_current_user)):
         headers = {"Authorization": f"Bearer {token}"}
 
         # 1. Pedir IDs activos y pausados (quitamos el filtro de status=active para ver todo)
-        search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
+        search_url = f"https://api.mercadolibre.com/users/{user_id}/items/search?limit=1000"
         response = requests.get(search_url, headers=headers)
         items_ids = response.json().get("results", [])
 
