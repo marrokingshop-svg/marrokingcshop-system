@@ -293,72 +293,21 @@ def sync_meli_products(user=Depends(get_current_user)):
 # =====================================================
 # PRODUCTOS
 # =====================================================
-@app.get("/products-grouped")
-def get_products_grouped():
-    conn = None
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
+@app.get("/products")
+def get_products_simple():
+    conn = get_connection()
+    cur = conn.cursor()
 
-        cur.execute("""
-            SELECT name, price, stock, meli_id, status
-            FROM products
-            ORDER BY name
-        """)
+    cur.execute("""
+        SELECT id, name, price, stock, meli_id, status
+        FROM products
+        ORDER BY id DESC
+    """)
 
-        rows = cur.fetchall()
+    rows = cur.fetchall()
+    conn.close()
 
-        grouped = {}
-
-        for r in rows:
-            # Validaciones de seguridad
-            if not r["meli_id"]:
-                continue
-
-            name = r["name"] or "Sin nombre"
-            price = float(r["price"]) if r["price"] else 0
-            stock = r["stock"] if r["stock"] else 0
-            status = r["status"] or "active"
-
-            # Obtener ID base (publicación)
-            if "-" in r["meli_id"]:
-                base_id = r["meli_id"].split("-")[0]
-            else:
-                base_id = r["meli_id"]
-
-            # Obtener título sin variación
-            if "(" in name:
-                title = name.split("(")[0].strip()
-            else:
-                title = name
-
-            # Crear grupo si no existe
-            if base_id not in grouped:
-                grouped[base_id] = {
-                    "meli_item_id": base_id,
-                    "title": title,
-                    "status": status,
-                    "variations": []
-                }
-
-            grouped[base_id]["variations"].append({
-                "name": name,
-                "price": price,
-                "stock": stock,
-                "meli_id": r["meli_id"]
-            })
-
-        return {"products": list(grouped.values())}
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-    finally:
-        if conn:
-            conn.close()
+    return {"products": rows}
 # =====================================================
 # LOGIN
 # =====================================================
