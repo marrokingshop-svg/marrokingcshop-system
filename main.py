@@ -58,6 +58,9 @@ def startup_db():
     conn = get_connection()
     cur = conn.cursor()
 
+    # ============================
+    # TABLA PRODUCTS (base)
+    # ============================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
@@ -67,12 +70,30 @@ def startup_db():
             meli_id TEXT UNIQUE,
             status TEXT DEFAULT 'active'
         );
-        
+    """)
+
+    # ============================
+    # AGREGAR COLUMNAS NUEVAS (si no existen)
+    # ============================
+    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS item_id TEXT;")
+    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS variation_id TEXT;")
+    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes TEXT;")
+    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;")
+
+    # ============================
+    # CREDENTIALS
+    # ============================
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS credentials (
             key TEXT PRIMARY KEY,
             value TEXT
         );
-        
+    """)
+
+    # ============================
+    # USERS
+    # ============================
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT UNIQUE,
@@ -83,7 +104,6 @@ def startup_db():
 
     conn.commit()
     conn.close()
-
 # =====================================================
 # SEGURIDAD
 # =====================================================
