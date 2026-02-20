@@ -68,9 +68,6 @@ def startup_db():
         );
     """)
 
-    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS item_id TEXT;")
-    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS variation_id TEXT;")
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS credentials (
             key TEXT PRIMARY KEY,
@@ -126,6 +123,9 @@ async def meli_callback(code: str = None):
     resp = requests.post(url, data=payload)
     data = resp.json()
 
+    if resp.status_code != 200:
+        return {"status": "error", "detail": data}
+
     if "access_token" in data:
         conn = get_connection()
         cur = conn.cursor()
@@ -145,7 +145,7 @@ async def meli_callback(code: str = None):
     return {"status": "error", "detail": data}
 
 # =====================================================
-# SINCRONIZAR PRODUCTOS (OPTIMIZADO)
+# SINCRONIZAR PRODUCTOS (VERSIÓN CORREGIDA PRO)
 # =====================================================
 @app.post("/meli/sync")
 def sync_meli_products(user=Depends(get_current_user)):
@@ -167,30 +167,54 @@ def sync_meli_products(user=Depends(get_current_user)):
         user_id = user_row["value"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # ============================
-        # OBTENER IDS
-        # ============================
         items_ids = []
         url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
         params = {"search_type": "scan", "limit": 100}
 
+        # ============================
+        # PRIMERA LLAMADA
+        # ============================
         response = requests.get(url, headers=headers, params=params)
-        data = response.json()
 
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error Mercado Libre: {response.text}"
+            )
+
+        data = response.json()
         scroll_id = data.get("scroll_id")
         items_ids.extend(data.get("results", []))
 
+        # ============================
+        # SCROLL
+        # ============================
         while scroll_id:
             params = {"search_type": "scan", "scroll_id": scroll_id}
             response = requests.get(url, headers=headers, params=params)
-            data = response.json()
 
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error Mercado Libre (scroll): {response.text}"
+                )
+
+            data = response.json()
             results = data.get("results", [])
+
             if not results:
                 break
 
             items_ids.extend(results)
             scroll_id = data.get("scroll_id")
+
+        if not items_ids:
+            return {
+                "status": "sin_datos",
+                "message": "No se encontraron productos en Mercado Libre",
+                "items_en_meli": 0,
+                "variaciones_guardadas": 0
+            }
 
         # ============================
         # GUARDAR PRODUCTOS
@@ -207,17 +231,14 @@ def sync_meli_products(user=Depends(get_current_user)):
                 continue
 
             item = detail_resp.json()
-
             status = item.get("status", "unknown")
             price = item.get("price") or 0
 
-            # Si tiene variaciones
             if item.get("variations"):
                 for var in item["variations"]:
                     attrs = " - ".join(
                         [a["value_name"] for a in var.get("attribute_combinations", [])]
                     )
-
                     name = f"{item['title']} ({attrs})"
                     stock = var.get("available_quantity") or 0
                     meli_var_id = f"{m_id}-{var['id']}"
@@ -233,7 +254,6 @@ def sync_meli_products(user=Depends(get_current_user)):
                             status = EXCLUDED.status;
                     """, (name, price, stock, meli_var_id, status))
                     count += 1
-
             else:
                 stock = item.get("available_quantity") or 0
 
@@ -267,7 +287,7 @@ def sync_meli_products(user=Depends(get_current_user)):
             conn.close()
 
 # =====================================================
-# PRODUCTOS AGRUPADOS (PARA TU TABLA)
+# PRODUCTOS AGRUPADOS
 # =====================================================
 @app.get("/products-grouped")
 def get_products_grouped():
@@ -293,7 +313,7 @@ def get_products_grouped():
             grouped[base_id] = {
                 "title": title,
                 "status": r["status"],
-                "meli_item_id": base_id,  # ✅ FIX
+                "meli_item_id": base_id,
                 "variations": []
             }
 
