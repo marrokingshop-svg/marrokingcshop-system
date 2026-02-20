@@ -309,6 +309,51 @@ def get_products_simple():
 
     return {"products": rows}
 # =====================================================
+# PRODUCTOS AGRUPADOS POR PUBLICACIÓN
+# =====================================================
+@app.get("/products-grouped")
+def get_products_grouped():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT name, price, stock, meli_id, status
+        FROM products
+        ORDER BY name
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    grouped = {}
+
+    for r in rows:
+        if not r["meli_id"]:
+            continue
+
+        # Separar item base de la variación
+        base_id = r["meli_id"].split("-")[0]
+
+        # Título base sin atributos
+        title = r["name"].split("(")[0].strip() if "(" in r["name"] else r["name"]
+
+        if base_id not in grouped:
+            grouped[base_id] = {
+                "meli_item_id": base_id,
+                "title": title,
+                "status": r["status"],
+                "variations": []
+            }
+
+        grouped[base_id]["variations"].append({
+            "name": r["name"],
+            "price": float(r["price"]) if r["price"] else 0,
+            "stock": r["stock"] or 0,
+            "meli_id": r["meli_id"]
+        })
+
+    return {"products": list(grouped.values())}
+# =====================================================
 # LOGIN
 # =====================================================
 @app.post("/login")
