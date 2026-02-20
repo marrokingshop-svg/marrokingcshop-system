@@ -14,9 +14,9 @@ app = FastAPI(title="Marrokingcshop System Pro")
 # =====================================================
 # CONFIGURACIÓN
 # =====================================================
-MELI_CLIENT_ID = "2347232636874610"
-MELI_CLIENT_SECRET = "cD2NU2eSj7FX1MVGZ29QxMHZyXujia5v"
-MELI_REDIRECT_URI = "https://marrokingcshop-api.onrender.com/auth/callback"
+MELI_CLIENT_ID = os.environ.get("MELI_CLIENT_ID")
+MELI_CLIENT_SECRET = os.environ.get("MELI_CLIENT_SECRET")
+MELI_REDIRECT_URI = os.environ.get("MELI_REDIRECT_URI")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.environ.get("SECRET_KEY", "MARROKING_SECRET_2024")
@@ -32,8 +32,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_headers=["*"]
 )
 
 @app.api_route("/{path_name:path}", methods=["OPTIONS"])
@@ -58,9 +57,6 @@ def startup_db():
     conn = get_connection()
     cur = conn.cursor()
 
-    # ============================
-    # TABLA PRODUCTS (base)
-    # ============================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
@@ -72,17 +68,9 @@ def startup_db():
         );
     """)
 
-    # ============================
-    # AGREGAR COLUMNAS NUEVAS (si no existen)
-    # ============================
     cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS item_id TEXT;")
     cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS variation_id TEXT;")
-    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes TEXT;")
-    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;")
 
-    # ============================
-    # CREDENTIALS
-    # ============================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS credentials (
             key TEXT PRIMARY KEY,
@@ -90,9 +78,6 @@ def startup_db():
         );
     """)
 
-    # ============================
-    # USERS
-    # ============================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -104,6 +89,7 @@ def startup_db():
 
     conn.commit()
     conn.close()
+
 # =====================================================
 # SEGURIDAD
 # =====================================================
@@ -159,7 +145,7 @@ async def meli_callback(code: str = None):
     return {"status": "error", "detail": data}
 
 # =====================================================
-# SINCRONIZAR PRODUCTOS (VERSIÓN CORREGIDA)
+# SINCRONIZAR PRODUCTOS (OPTIMIZADO)
 # =====================================================
 @app.post("/meli/sync")
 def sync_meli_products(user=Depends(get_current_user)):
@@ -179,19 +165,14 @@ def sync_meli_products(user=Depends(get_current_user)):
 
         token = token_row["value"]
         user_id = user_row["value"]
-
         headers = {"Authorization": f"Bearer {token}"}
 
-        # =====================================================
-        # OBTENER TODOS LOS ITEMS (SCAN REAL)
-        # =====================================================
+        # ============================
+        # OBTENER IDS
+        # ============================
         items_ids = []
         url = f"https://api.mercadolibre.com/users/{user_id}/items/search"
-
-        params = {
-            "search_type": "scan",
-            "limit": 100
-        }
+        params = {"search_type": "scan", "limit": 100}
 
         response = requests.get(url, headers=headers, params=params)
         data = response.json()
@@ -199,12 +180,8 @@ def sync_meli_products(user=Depends(get_current_user)):
         scroll_id = data.get("scroll_id")
         items_ids.extend(data.get("results", []))
 
-        while True:
-            params = {
-                "search_type": "scan",
-                "scroll_id": scroll_id
-            }
-
+        while scroll_id:
+            params = {"search_type": "scan", "scroll_id": scroll_id}
             response = requests.get(url, headers=headers, params=params)
             data = response.json()
 
@@ -215,9 +192,9 @@ def sync_meli_products(user=Depends(get_current_user)):
             items_ids.extend(results)
             scroll_id = data.get("scroll_id")
 
-        # =====================================================
+        # ============================
         # GUARDAR PRODUCTOS
-        # =====================================================
+        # ============================
         count = 0
 
         for m_id in items_ids:
@@ -230,33 +207,36 @@ def sync_meli_products(user=Depends(get_current_user)):
                 continue
 
             item = detail_resp.json()
-            status = item.get("status", "active")
 
-            products_to_process = []
+            status = item.get("status", "unknown")
+            price = item.get("price") or 0
 
+            # Si tiene variaciones
             if item.get("variations"):
                 for var in item["variations"]:
                     attrs = " - ".join(
-                        [a["value_name"] for a in var["attribute_combinations"]]
+                        [a["value_name"] for a in var.get("attribute_combinations", [])]
                     )
 
-                    products_to_process.append({
-                        "name": f"{item['title']} ({attrs})",
-                        "price": item.get("price"),
-                        "stock": var.get("available_quantity"),
-                        "meli_id": f"{m_id}-{var['id']}",
-                        "status": status
-                    })
-            else:
-                products_to_process.append({
-                    "name": item.get("title"),
-                    "price": item.get("price"),
-                    "stock": item.get("available_quantity"),
-                    "meli_id": m_id,
-                    "status": status
-                })
+                    name = f"{item['title']} ({attrs})"
+                    stock = var.get("available_quantity") or 0
+                    meli_var_id = f"{m_id}-{var['id']}"
 
-            for p in products_to_process:
+                    cur.execute("""
+                        INSERT INTO products (name, price, stock, meli_id, status)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (meli_id)
+                        DO UPDATE SET
+                            name = EXCLUDED.name,
+                            price = EXCLUDED.price,
+                            stock = EXCLUDED.stock,
+                            status = EXCLUDED.status;
+                    """, (name, price, stock, meli_var_id, status))
+                    count += 1
+
+            else:
+                stock = item.get("available_quantity") or 0
+
                 cur.execute("""
                     INSERT INTO products (name, price, stock, meli_id, status)
                     VALUES (%s, %s, %s, %s, %s)
@@ -266,50 +246,28 @@ def sync_meli_products(user=Depends(get_current_user)):
                         price = EXCLUDED.price,
                         stock = EXCLUDED.stock,
                         status = EXCLUDED.status;
-                """, (
-                    p["name"],
-                    p["price"],
-                    p["stock"],
-                    p["meli_id"],
-                    p["status"]
-                ))
+                """, (item["title"], price, stock, m_id, status))
                 count += 1
 
         conn.commit()
+
         return {
             "status": "sincronizado",
-            "total_items_meli": len(items_ids),
-            "productos_guardados": count
+            "items_en_meli": len(items_ids),
+            "variaciones_guardadas": count
         }
 
     except Exception as e:
         if conn:
             conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
         if conn:
             conn.close()
 
 # =====================================================
-# PRODUCTOS
-# =====================================================
-@app.get("/products")
-def get_products_simple():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, name, price, stock, meli_id, status
-        FROM products
-        ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return {"products": rows}
-# =====================================================
-# PRODUCTOS AGRUPADOS POR PUBLICACIÓN
+# PRODUCTOS AGRUPADOS (PARA TU TABLA)
 # =====================================================
 @app.get("/products-grouped")
 def get_products_grouped():
@@ -328,18 +286,11 @@ def get_products_grouped():
     grouped = {}
 
     for r in rows:
-        if not r["meli_id"]:
-            continue
-
-        # Separar item base de la variación
         base_id = r["meli_id"].split("-")[0]
-
-        # Título base sin atributos
-        title = r["name"].split("(")[0].strip() if "(" in r["name"] else r["name"]
+        title = r["name"].split("(")[0].strip()
 
         if base_id not in grouped:
             grouped[base_id] = {
-                "meli_item_id": base_id,
                 "title": title,
                 "status": r["status"],
                 "variations": []
@@ -348,11 +299,11 @@ def get_products_grouped():
         grouped[base_id]["variations"].append({
             "name": r["name"],
             "price": float(r["price"]) if r["price"] else 0,
-            "stock": r["stock"] or 0,
-            "meli_id": r["meli_id"]
+            "stock": r["stock"] or 0
         })
 
     return {"products": list(grouped.values())}
+
 # =====================================================
 # LOGIN
 # =====================================================
