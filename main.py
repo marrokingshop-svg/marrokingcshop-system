@@ -293,6 +293,7 @@ def get_products_grouped():
             grouped[base_id] = {
                 "title": title,
                 "status": r["status"],
+                "meli_item_id": base_id,  # ✅ FIX
                 "variations": []
             }
 
